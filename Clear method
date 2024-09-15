@@ -1,0 +1,239 @@
+from openai import OpenAI
+import os
+os.environ["OPENAI_API_KEY"] = secret_key
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", secret_key))
+
+#function to get the model response
+def get_completion(
+    messages: list[dict[str, str]],
+    model: str = "gpt-4",
+    max_tokens=1000,
+    temperature=0,
+    stop=None,
+    tools=None,
+    logprobs=None,  # whether to return log probabilities of the output tokens or not. If true, returns the log probabilities of each output token returned in the content of message..
+    top_logprobs=None,
+) -> str:
+    params = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stop": stop,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+    }
+    if tools:
+        params["tools"] = tools
+
+    completion = client.chat.completions.create(**params)
+    return completion
+
+
+
+
+#Main function that we use:
+def clear(task, iterations):
+  #get an initial response
+  response = get_completion(
+          [{"role": "user", "content": task}],
+          model="gpt-4o",
+  )
+  answer = improve(iterations, response, task) ### 1.2.3
+  return answer
+
+#loop through improving the response
+def improve(iterations, response, task):
+  j = -1
+  for _ in range(iterations+1):
+    j += 1
+    #get the expert feedback:
+    ex = expert(response.choices[0].message.content, task)
+    #get the amateur feedback:
+    am = amateur(response.choices[0].message.content, task)
+
+    #filter the feedbacks:
+    if iterations != j:
+      filtered = filter(ex, am)
+    #print(f"filtered feedback: {filtered}\n")
+
+    #get the new prompt
+    prompt = get_new_prompt(filtered, j, iterations, task)
+
+    #get the new response
+    response = get_completion(
+          [{"role": "user", "content": prompt.format(task = task, response = response.choices[0].message.content, feedback = filtered)}],
+          model="gpt-4o",
+    )
+  return response.choices[0].message.content
+
+
+
+def expert(response, task):
+  Expert_prompt = """ You are given a task and an example response. Provide feedback on it and mention all of the concepts that were missed and how to include them. Do not write about how long or verbose the answer is. Format: [0-100 based on coverage] [reason]xxxx (MAX 50 words). Ex: [31] [reason] "put you reason here".
+    The task: {task}
+    Example response: {response}"""
+
+
+  Expert_feedback = get_completion(
+          [{"role": "user", "content": Expert_prompt.format(task = task, response = response)}],
+          model="gpt-4o",
+    )
+  return Expert_feedback.choices[0].message.content
+def amateur(response, task):
+  #get the amateur feedback
+  Amateur_prompt = """ You are given a task and an example response. Provide feedback on it and mention all of the concepts that were missed and how to include them. Do not write about how long or verbose the answer is. Format: [0-100 based on coverage] [reason]xxxx (MAX 50 words). Ex: [31] [reason] "put you reason here".
+  The task: {task}
+  Example response: {response}"""
+
+  Amateur_feedback = get_completion(
+          [{"role": "user", "content": Amateur_prompt.format(task = task, response = response)}],
+          model="gpt-3.5-turbo",
+    )
+  return Amateur_feedback.choices[0].message.content
+
+def filter(f1, f2):
+  #Get a summary for both feedbacks. basically contrasting them. this is the method that I tried that works the best.
+  Prompt = """You will be provided with two feedbacks. An expert and an amateur response. Using both responses, contrast the feedback to write a short summarized feedback with more relevant evaluations and advice, but focus more on the expert. Also average the numbers between the []. Format: [0-100][reason]xxx (MAX 50 words.)
+  Expert:{Expert}. Amateur:{Amateur}"""
+  Filtered_feedback = get_completion(
+          [{"role": "user", "content": Prompt.format(Expert = f1, Amateur = f2)}],
+          model="gpt-4o",
+    )
+  return Filtered_feedback.choices[0].message.content
+
+def get_new_prompt(Filtered_feedback, num_iter, iter, task):
+  #basically giving the feedback to the model and asking it to improve its response
+  if num_iter == iter:
+    New_prompt = """ You are given a task. You are also given a reponse along with feedback on that response. Use the feedback to improve the response. Only output your final answer wihtout your working and explanation. JUST THE ANSWER. Format:[answer] Ex: 32.3
+  The task is: {task}
+  Response: {response}
+  Feedback: {feedback}"""
+  else:
+    New_prompt = """ You are given a task. You are also given a reponse along with feedback on that response. Use the feedback to improve the response.
+    The task is: {task}
+    Response: {response}
+    Feedback: {feedback}"""
+  return New_prompt
+
+
+
+
+
+#loop through improving the response
+def clear_a_star(task, iterations):
+  #get an initial response
+  response = get_completion(
+          [{"role": "user", "content": task}],
+          model="gpt-4o",
+  ).choices[0].message.content
+  tree = []
+  j = -1
+  filtered_list = []
+  open_list = []
+  closed_list = []
+  for _ in range(iterations+1):
+    j += 1
+    node = []
+
+    #filter the feedbacks:
+    if iterations != j:
+      #get the expert feedback:
+      ex = expert(response, task)
+      if j == 0:
+        first_score = ex.split("[")[1].split("]")[0]
+      am = amateur(response, task)
+      filtered = filter(ex, am)
+      print(f"filtered feedback: {filtered}\n")
+      #get the cost and heuristics for a* search
+      cost = node_cost(ex, am)
+      heuristic = node_heuristic(ex,am)
+      node.append(response)
+      node.append(cost)
+      node.append(heuristic)
+      node.append(filtered)
+      tree.append(node)
+      open_list.append(node)
+
+      while open_list:
+        closed_list.append(open_list[j])
+        f_n = [node[1] + node[2] for node in tree]
+        min_index = f_n.index(min(f_n))
+        if open_list[min_index] in closed_list:
+          min_index = j
+        break
+
+
+    #get the new prompt
+    prompt = get_new_prompt(feedback, j, iterations, task)
+    #get the new response
+    response = get_completion(
+          [{"role": "user", "content": prompt.format(task = task, response = tree[min_index][0], feedback = tree[min_index][3])}],
+          model="gpt-4o",
+    ).choices[0].message.content
+    best_node = tree[min_index][0]
+
+  return response
+
+
+
+def expert(response, task):
+  Expert_prompt = """ You are given a task and an example response. Provide feedback on it and mention all of the concepts that were missed and how to include them. Do not write about how long or verbose the answer is. Format: [0-100 based on coverage] [reason]xxxx (MAX 50 words). Ex: [31] [reason] "put you reason here".
+    The task: {task}
+    Example response: {response}"""
+
+
+  Expert_feedback = get_completion(
+          [{"role": "user", "content": Expert_prompt.format(task = task, response = response)}],
+          model="gpt-4o",
+    )
+  return Expert_feedback.choices[0].message.content
+def amateur(response, task):
+  #get the amateur feedback
+  Amateur_prompt = """ You are given a task and an example response. Provide feedback on it and mention all of the concepts that were missed and how to include them. Do not write about how long or verbose the answer is. Format: [0-100 based on coverage] [reason]xxxx (MAX 50 words). Ex: [31] [reason] "put you reason here".
+  The task: {task}
+  Example response: {response}"""
+
+  Amateur_feedback = get_completion(
+          [{"role": "user", "content": Amateur_prompt.format(task = task, response = response)}],
+          model="gpt-3.5-turbo",
+    )
+  return Amateur_feedback.choices[0].message.content
+
+def filter(f1, f2):
+  #Get a summary for both feedbacks. basically contrasting them. this is the method that I tried that works the best.
+  Prompt = """You will be provided with two feedbacks. An expert and an amateur response. Using both responses, contrast a feedback to create a short dummary, but focus more on the expert. Also average the numbers between the []. Format: [0-100][reason]xxx (MAX 50 words.)
+  Expert:{Expert}. Amateur:{Amateur}"""
+  Filtered_feedback = get_completion(
+          [{"role": "user", "content": Prompt.format(Expert = f1, Amateur = f2)}],
+          model="gpt-4o",
+    )
+  return Filtered_feedback.choices[0].message.content
+
+def get_new_prompt(Filtered_feedback, num_iter, iter, task):
+  #basically giving the feedback to the model and asking it to improve its response
+  if num_iter == iter:
+    New_prompt = """ You are given a task. You are also given a reponse along with feedback on that response. Use the feedback to improve the response. Only output your final answer wihtout your working and explanation. JUST THE ANSWER. Format:[answer] Ex: 32.3
+  The task is: {task}
+  Response: {response}
+  Feedback: {feedback}"""
+  else:
+    New_prompt = """ You are given a task. You are also given a reponse along with feedback on that response. Use the feedback to improve the response.
+    The task is: {task}
+    Response: {response}
+    Feedback: {feedback}"""
+  return New_prompt
+
+def node_cost(ex,am):
+  ex = float(ex.split("[")[1].split("]")[0])
+  am = float(am.split("[")[1].split("]")[0])
+  c =  abs(ex + am)
+  return c
+
+
+
+
+
+
+
+
