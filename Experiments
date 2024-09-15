@@ -1,0 +1,73 @@
+from datasets import load_dataset
+dataset = load_dataset("gsm8k", "main", split="test")
+from itertools import accumulate
+def gsm8k(total,iter):
+  correct = 0
+  wrong = []
+  i=1
+  for question in dataset:
+    i+=1
+    task = "Solve this question." + question['question']
+    correct_answer = question['answer'].split('####')[-1]
+    clear_answer = clear(task, iter)
+    extract_prompt = "Extract the final answer from the following answer. Only ouput the number. Ex: 21 " + clear_answer
+    clear_answer = get_completion(
+          [{"role": "user", "content": extract_prompt}],
+          model="gpt-3.5-turbo",
+    ).choices[0].message.content
+    clear_answer = clear_answer.replace(',','').replace('$','')
+    try:
+      clear_answer= float(clear_answer)
+      if clear_answer == float(correct_answer):
+        correct += 1
+      else:
+        wrong_answer = f"clear: {clear_answer}, correct: {correct_answer}"
+        wrong.append(wrong_answer)
+        print(f"wrong: {wrong}")
+    except:
+      i -= 1
+      wrong_answer = f"clear: {clear_answer}, correct: {correct_answer}"
+      wrong.append(wrong_answer)
+      print(f"wrong: {wrong}")
+    if i != 1:
+      accuracy = correct/(i-1)
+    else:
+      accuracy = 0
+    print(f"question {i-1}: correct: {correct}, accuracy: {accuracy}")
+    if i > total:
+      print(f"wrong: {wrong}")
+      break
+gsm8k(400,3)
+
+
+
+
+
+
+
+
+
+def commongen():
+  i = 0
+  concept_number = 0
+  missed = 0
+  for example in commongen_hard:
+    for concept in example['concepts']:
+      concept_number += 1
+    i += 1
+    if isinstance(example, dict) and 'concepts' in example:
+        tree_task = "Write a sentence that uses these exact words: " + ", ".join(example['concepts'])
+        print(f"iteration: {i}")
+        our_answer = clear(tree_task, 5)
+        checktask = "Here is a sentence: " + our_answer + ". Here are the concepts that should've been covered. Output a score according to the relevence of the outputs to the concepts and how much the sentence makes sense. Be strict. format: [0-100] ex: 27. Only OUPUT A NUMBER! The concepts: " + ", ".join(example['concepts'])
+        num_missed =  get_completion(
+          [{"role": "user", "content": checktask}],
+          model="gpt-4o",
+        ).choices[0].message.content
+        missed += int(num_missed)
+        #print(f"total number of concepts: {concept_number}")
+        #print(f"number of missed concepts: {missed}")
+        print(f"Relevance score: {missed/i}%")
+  print(f"total number of concepts: {concept_number}")
+  print(f"number of missed concepts: {missed}")
+commongen()
